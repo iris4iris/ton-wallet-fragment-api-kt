@@ -11,8 +11,10 @@ fun main() {
 		.split(Regex("\\s+"))
 		.filter { it.isNotBlank() }
 
-	val address =  System.getenv("TON_ADDRESS")
-	val quantity = 1000.0 //
+	val address = System.getenv("TON_ADDRESS")?.trim().orEmpty()
+	require(address.isNotEmpty()) { "TON_ADDRESS is required" }
+	val quantity = System.getenv("TON_AMOUNT")?.toDoubleOrNull()
+		?: error("TON_AMOUNT is required (TON, e.g. 0.05)")
 
 	TonWallet(walletApiKey, walletMnemonic).use {
 		val response = it.sendTransfer(address, amountNano = Utils.toNano(quantity).toLong(), "")

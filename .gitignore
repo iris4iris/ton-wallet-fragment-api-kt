@@ -3,3 +3,9 @@ build/
 .idea/
 out/
 *.iml
+.env
+.env.*
+!.env.example
+local.properties
+*.log
+META-INF/
