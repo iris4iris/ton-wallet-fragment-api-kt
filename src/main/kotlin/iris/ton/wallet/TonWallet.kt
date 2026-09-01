@@ -159,14 +159,11 @@ class TonWallet(
                     ?: return@withContext TransferResult.Err(
                         "sendBocReturnHash ok but no hash in result=${tonResp.result}",
                     )
-                val start = System.currentTimeMillis()
                 if (!waitSeqno(seqno)) {
                     return@withContext TransferResult.Err(
                         "BOC accepted (hash=$hash) but wallet seqno did not increase — transfer dropped or not executed",
                     )
                 }
-                val end = System.currentTimeMillis()
-                println("Seqno wait = " + (end-start))
                 TransferResult.Ok(hash)
             }
         } catch (e: IOException) {
