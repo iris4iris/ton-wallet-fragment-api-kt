@@ -49,7 +49,7 @@ class FragmentClient(
         return post(
             "transaction" to "1",
             "id" to reqId,
-            "show_sender" to if (showSender) "1" else "0",
+            "show_sender" to (if (showSender) "1" else "0"),
             "method" to "getBuyStarsLink",
         )
     }
@@ -83,16 +83,12 @@ class FragmentClient(
         ) {
             parameter("hash", hash)
             header("accept", "application/json, text/javascript, */*; q=0.01")
-            header("accept-language", "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7,ru-RU;q=0.6,ru;q=0.5")
             header("content-type", "application/x-www-form-urlencoded; charset=UTF-8")
             header("origin", "https://fragment.com")
             header("referer", "https://fragment.com/stars/buy")
             header("cookie", cookies)
             header("user-agent", USER_AGENT)
             header("x-requested-with", "XMLHttpRequest")
-            header("sec-fetch-dest", "empty")
-            header("sec-fetch-mode", "cors")
-            header("sec-fetch-site", "same-origin")
         }
         val status = response.status.value
         if (status !in 200..299) {
@@ -112,8 +108,7 @@ class FragmentClient(
     companion object {
         const val FRAGMENT_API = "https://fragment.com/api"
         const val USER_AGENT =
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36 OPR/134.0.0.0 (Edition Yx 08)"
 
         fun defaultHttpClient(): HttpClient = HttpClient(CIO) {
             expectSuccess = false

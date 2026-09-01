@@ -85,19 +85,23 @@ class TonWallet(
 
     /**
      * @param amountNano nanotons
-     * @param payload text comment (Fragment memo or empty for a plain transfer)
-     * @param payloadBoc original Fragment base64 BOC; used only if [payload] is blank
+     * @param payload text comment for a plain transfer. Ignored when [payloadBoc] is set.
+     * @param payloadBoc base64 BOC body (Fragment invoice). Sent as-is.
+     *   One of [payload] or [payloadBoc] must be non-null.
      * @param bounce `null` = auto: true if dest is deployed, false for uninit wallets
      *   (`t.me/wallet` first receive). Fragment contracts are deployed → bounce true.
      */
     fun sendTransfer(
         address: String,
         amountNano: Long,
-        payload: String,
+        payload: String? = null,
         payloadBoc: String? = null,
         bounce: Boolean? = null,
     ): String {
         require(amountNano > 0) { "amount must be > 0 nanotons" }
+        require(payload != null || payloadBoc != null) {
+            "payload or payloadBoc must be specified"
+        }
         try {
             val amount = BigInteger.valueOf(amountNano)
             val gasReserve = Utils.toNano(0.01)
@@ -183,11 +187,8 @@ class TonWallet(
         )
     }
 
-    /** Text comment when present; otherwise Fragment's payload BOC. */
-    private fun transferBody(comment: String, payloadBoc: String?): Cell {
-        if (comment.isNotBlank()) {
-            return MsgUtils.createTextMessageBody(comment)
-        }
+    /** Fragment BOC as-is when present; otherwise a text comment. */
+    private fun transferBody(comment: String?, payloadBoc: String?): Cell {
         val raw = payloadBoc?.trim().orEmpty()
         if (raw.isNotEmpty()) {
             try {
@@ -196,17 +197,17 @@ class TonWallet(
                 try {
                     return Cell.fromBoc(padBase64(raw))
                 } catch (_: Exception) {
-                    // fall through
+                    // fall through to text
                 }
             }
         }
-        return MsgUtils.createTextMessageBody(comment)
+        return MsgUtils.createTextMessageBody(comment.orEmpty())
     }
 
     private fun outgoingPayment(
         dest: Address,
         amount: BigInteger,
-        comment: String,
+        comment: String?,
         payloadBoc: String?,
         bounce: Boolean,
     ): OutAction {

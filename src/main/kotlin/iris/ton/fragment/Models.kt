@@ -52,9 +52,8 @@ data class Recipient(
 data class StarsPayment(
     val destination: String,
     val amountNano: Long,
-    val comment: String,
+    val payload: String,
     val reqId: String,
-    val payloadBoc: String = "",
 )
 
 data class StarsPrice(

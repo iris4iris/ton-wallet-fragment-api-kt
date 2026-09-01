@@ -61,14 +61,14 @@ class FragmentStars(
         val amountRaw = message.amount ?: throw FragmentException("Missing amount")
         val amountNano = amountRaw.toLongOrNull()
             ?: throw FragmentException("Bad amount: $amountRaw")
-        val comment = Payload.decode(message.payload.orEmpty())
+        val payload = message.payload.orEmpty()
+        if (payload.isBlank()) throw FragmentException("Missing payload from getBuyStarsLink")
 
         return StarsPayment(
             destination = address,
             amountNano = amountNano,
-            comment = comment,
+            payload = payload,
             reqId = reqId,
-            payloadBoc = message.payload.orEmpty(),
         )
     }
 
@@ -82,8 +82,8 @@ class FragmentStars(
             val hash = wallet.sendTransfer(
                 address = payment.destination,
                 amountNano = payment.amountNano,
-                payload = payment.comment,
-                payloadBoc = payment.payloadBoc,
+                payloadBoc = payment.payload,
+                bounce = true,
             )
             StarsResult.Ok(hash)
         } catch (e: Exception) {
