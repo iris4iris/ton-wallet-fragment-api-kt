@@ -18,6 +18,7 @@ import org.ton.ton4j.tlb.OutList
 import org.ton.ton4j.toncenter.Network
 import org.ton.ton4j.toncenter.TonCenter
 import org.ton.ton4j.toncenter.model.SendBocResponse
+import org.ton.ton4j.toncenter.model.WalletInformationResponse
 import org.ton.ton4j.utils.Utils
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.CancellationException
@@ -112,11 +113,13 @@ class TonWallet(
     ): TransferResult {
         require(amountNano > 0) { "amount must be > 0 nanotons" }
         return try {
-            withContext(Dispatchers.IO) {
+            val sent = withContext(Dispatchers.IO) {
                 val amount = BigInteger.valueOf(amountNano)
                 val gasReserve = Utils.toNano(0.01)
                 val needed = amount.add(gasReserve)
-                val balance = wallet.getBalance() ?: BigInteger.ZERO
+                val info = walletInformation()
+                    ?: return@withContext TransferResult.Err("Empty getWalletInformation response")
+                val balance = info.balance?.toBigIntegerOrNull() ?: BigInteger.ZERO
                 if (balance < needed) {
                     return@withContext TransferResult.Err(
                         "Insufficient balance: ${formatTon(balance)} TON, need ${formatTon(needed)} TON (amount + gas)",
@@ -132,7 +135,7 @@ class TonWallet(
                     false
                 }
 
-                val seqno = wallet.getSeqno()
+                val seqno = info.seqno ?: 0L
                 val inner = WalletV5InnerRequest.builder()
                     .outActions(
                         OutList.builder()
@@ -163,12 +166,14 @@ class TonWallet(
                     ?: return@withContext TransferResult.Err(
                         "sendBocReturnHash ok but no hash in result=${tonResp.result}",
                     )
-                if (waitSeqno && !this@TonWallet.waitSeqno(seqno)) {
-                    return@withContext TransferResult.Err(
-                        "BOC accepted (hash=$hash) but wallet seqno did not increase — transfer dropped or not executed",
-                    )
-                }
                 TransferResult.Ok(hash, seqno)
+            }
+            if (sent is TransferResult.Ok && waitSeqno && !waitSeqno(sent.seqno)) {
+                TransferResult.Err(
+                    "BOC accepted (hash=${sent.txHash}) but wallet seqno did not increase — transfer dropped or not executed",
+                )
+            } else {
+                sent
             }
         } catch (e: IOException) {
             throw e
@@ -182,7 +187,9 @@ class TonWallet(
     suspend fun getBalance(): BalanceResult {
         return try {
             withContext(Dispatchers.IO) {
-                val nano = wallet.getBalance() ?: BigInteger.ZERO
+                val info = walletInformation()
+                    ?: return@withContext BalanceResult.Err("Empty getWalletInformation response")
+                val nano = info.balance?.toBigIntegerOrNull() ?: BigInteger.ZERO
                 BalanceResult.Ok(BigDecimal(nano).divide(NANOTON, 9, RoundingMode.DOWN))
             }
         } catch (e: IOException) {
@@ -233,9 +240,18 @@ class TonWallet(
         return false
     }
 
-    private fun seqnoReady(seqnoBefore: Long): Boolean {
+    private fun walletInformation(): WalletInformationResponse? {
+        val resp = tonCenter.getWalletInformation(address())
+            ?: return null
+        if (!resp.isSuccess) {
+            throw WalletException(resp.error ?: "getWalletInformation failed, code=${resp.code}")
+        }
+        return resp.result
+    }
+
+    private suspend fun seqnoReady(seqnoBefore: Long): Boolean {
         return try {
-            wallet.getSeqno() > seqnoBefore
+            withContext(Dispatchers.IO) { wallet.getSeqno() > seqnoBefore }
         } catch (e: IOException) {
             throw e
         } catch (_: Exception) {
