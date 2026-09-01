@@ -79,8 +79,7 @@ class TonWallet(
             .build()
     }
 
-    fun address(): String = wallet.address.toBounceable()
-
+    val address: String by lazy { wallet.address.toBounceable() }
     /**
      * EQ/UQ/raw pass through. `name.ton` / `name.t.me` are resolved to the
      * DNS wallet record (not the domain NFT).
@@ -241,7 +240,7 @@ class TonWallet(
     }
 
     private fun walletInformation(): WalletInformationResponse? {
-        val resp = tonCenter.getWalletInformation(address())
+        val resp = tonCenter.getWalletInformation(address)
             ?: return null
         if (!resp.isSuccess) {
             throw WalletException(resp.error ?: "getWalletInformation failed, code=${resp.code}")
@@ -354,7 +353,7 @@ class TonWallet(
     companion object {
         /** Default Wallet V5R1 walletId used by Tonkeeper on mainnet. */
         const val MAINNET_WALLET_ID = 2147483409L
-        private const val SEQNO_FLOOR_MS = 500L
+        private const val SEQNO_FLOOR_MS = 400L
         private const val SEQNO_MAX_N_MS = 12_000L
         private const val SEQNO_DEADLINE_MS = 16_000L
         private const val SEQNO_INITIAL_MS = 1_000L

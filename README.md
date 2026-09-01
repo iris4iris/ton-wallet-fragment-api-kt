@@ -113,7 +113,3 @@ searchStarsRecipient  →  initBuyStarsRequest
 ## License
 
 MIT. No warranty.
-
----
-
-The Stars-on-Fragment flow follows the idea of [klaymov/fragment-api-wallet](https://github.com/klaymov/fragment-api-wallet).
