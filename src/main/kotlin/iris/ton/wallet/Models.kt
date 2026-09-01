@@ -7,7 +7,8 @@ import kotlinx.serialization.json.JsonObject
 class WalletException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 
 sealed class TransferResult {
-    data class Ok(val txHash: String) : TransferResult()
+    /** [seqno] is the wallet seqno used in the sent message (before +1). */
+    data class Ok(val txHash: String, val seqno: Long) : TransferResult()
     data class Err(val message: String, val cause: Throwable? = null) : TransferResult()
 }
 

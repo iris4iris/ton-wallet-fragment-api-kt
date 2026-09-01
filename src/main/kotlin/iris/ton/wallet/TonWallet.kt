@@ -98,6 +98,9 @@ class TonWallet(
      * @param payloadBoc base64 BOC body (Fragment invoice). Sent as-is.
      * @param bounce `null` = auto: true if dest is deployed, false for uninit wallets
      *   (`t.me/wallet` first receive). Fragment contracts are deployed → bounce true.
+     * @param waitSeqno if `true`, wait until wallet seqno advances (on-chain confirm).
+     *   If `false`, return as soon as TonCenter accepts the BOC; use [Ok.seqno]
+     *   with [waitSeqno] or [iris.ton.wallet.TonViewer] to confirm later.
      */
     suspend fun sendTransfer(
         address: String,
@@ -105,6 +108,7 @@ class TonWallet(
         payload: String? = null,
         payloadBoc: String? = null,
         bounce: Boolean? = null,
+        waitSeqno: Boolean = true,
     ): TransferResult {
         require(amountNano > 0) { "amount must be > 0 nanotons" }
         return try {
@@ -159,12 +163,12 @@ class TonWallet(
                     ?: return@withContext TransferResult.Err(
                         "sendBocReturnHash ok but no hash in result=${tonResp.result}",
                     )
-                if (!waitSeqno(seqno)) {
+                if (waitSeqno && !this@TonWallet.waitSeqno(seqno)) {
                     return@withContext TransferResult.Err(
                         "BOC accepted (hash=$hash) but wallet seqno did not increase — transfer dropped or not executed",
                     )
                 }
-                TransferResult.Ok(hash)
+                TransferResult.Ok(hash, seqno)
             }
         } catch (e: IOException) {
             throw e
@@ -194,20 +198,25 @@ class TonWallet(
         tonCenter.close()
     }
 
-    private suspend fun waitSeqno(seqnoBefore: Long): Boolean {
+    /**
+     * Wait until this wallet's seqno advances past [seqno]
+     * (the value from [TransferResult.Ok.seqno]).
+     * @return `true` if seqno increased before the deadline.
+     */
+    suspend fun waitSeqno(seqno: Long): Boolean {
         val n = expectedWaitMs.get().coerceIn(SEQNO_FLOOR_MS, SEQNO_MAX_N_MS)
         val started = System.currentTimeMillis()
         val deadline = started + SEQNO_DEADLINE_MS
         fun elapsedMs(): Long = System.currentTimeMillis() - started
 
         if (n > 0L) delay(n)
-        if (seqnoReady(seqnoBefore)) {
+        if (seqnoReady(seqno)) {
             expectedWaitMs.set(maxOf(SEQNO_FLOOR_MS, n * 3 / 4))
             return true
         }
 
         if (SEQNO_RETRY_MS > 0L) delay(SEQNO_RETRY_MS)
-        if (seqnoReady(seqnoBefore)) {
+        if (seqnoReady(seqno)) {
             learnFromMiss(n, elapsedMs())
             return true
         }
@@ -216,7 +225,7 @@ class TonWallet(
             val remaining = deadline - System.currentTimeMillis()
             if (remaining <= 0L) break
             delay(minOf(SEQNO_POLL_MS, remaining))
-            if (seqnoReady(seqnoBefore)) {
+            if (seqnoReady(seqno)) {
                 learnFromMiss(n, elapsedMs())
                 return true
             }
@@ -329,12 +338,12 @@ class TonWallet(
     companion object {
         /** Default Wallet V5R1 walletId used by Tonkeeper on mainnet. */
         const val MAINNET_WALLET_ID = 2147483409L
-        private const val SEQNO_FLOOR_MS = 400L
+        private const val SEQNO_FLOOR_MS = 500L
         private const val SEQNO_MAX_N_MS = 12_000L
         private const val SEQNO_DEADLINE_MS = 16_000L
         private const val SEQNO_INITIAL_MS = 1_000L
         private const val SEQNO_RETRY_MS = 500L
-        private const val SEQNO_POLL_MS = 1_000L
+        private const val SEQNO_POLL_MS = 2_000L
         private val NANOTON = BigDecimal.TEN.pow(9)
         private val dnsHttp: HttpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
