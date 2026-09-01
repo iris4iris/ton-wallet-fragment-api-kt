@@ -105,9 +105,9 @@ searchStarsRecipient  →  initBuyStarsRequest
      recipient                                       │
                                               getBuyStarsLink
                                                      │
-                                              Payload.decode()
-                                                      │
-                                         WalletV5R1.transfer(comment)
+                                              payload BOC as-is
+                                                     │
+                                         WalletV5R1.transfer
 ```
 
 ## License
