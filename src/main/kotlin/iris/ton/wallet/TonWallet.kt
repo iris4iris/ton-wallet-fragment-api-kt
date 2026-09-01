@@ -20,6 +20,10 @@ import org.ton.ton4j.toncenter.TonCenter
 import org.ton.ton4j.toncenter.model.SendBocResponse
 import org.ton.ton4j.utils.Utils
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.math.BigDecimal
 import java.math.BigInteger
@@ -31,6 +35,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
 import java.time.Duration
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Wallet V5R1 over TonCenter HTTP.
@@ -49,6 +54,7 @@ class TonWallet(
     private val words: List<String> = mnemonic.map { it.trim() }.filter { it.isNotEmpty() }
     private val tonCenter: TonCenter
     private val wallet: WalletV5
+    private val expectedWaitMs = AtomicLong(SEQNO_INITIAL_MS)
 
     init {
         require(words.size == 12 || words.size == 24) {
@@ -78,21 +84,22 @@ class TonWallet(
      * EQ/UQ/raw pass through. `name.ton` / `name.t.me` are resolved to the
      * DNS wallet record (not the domain NFT).
      */
-    fun resolveDestination(address: String): Address {
+    suspend fun resolveDestination(address: String): Address {
         val trimmed = address.trim()
         require(trimmed.isNotEmpty()) { "address is blank" }
         return if (isTonDomain(trimmed)) resolveDns(trimmed.lowercase()) else Address.of(trimmed)
     }
 
     /**
-     * @param address destination: user-friendly (`EQ`/`UQ`, 48 chars), raw (`0:hex`), * or a TON DNS name (`name.ton` / `name.t.me`).
+     * @param address destination: user-friendly (`EQ`/`UQ`, 48 chars), raw (`0:hex`),
+     *   or a TON DNS name (`name.ton` / `name.t.me`).
      * @param amountNano nanotons
      * @param payload text comment for a plain transfer. Ignored when [payloadBoc] is set.
      * @param payloadBoc base64 BOC body (Fragment invoice). Sent as-is.
      * @param bounce `null` = auto: true if dest is deployed, false for uninit wallets
      *   (`t.me/wallet` first receive). Fragment contracts are deployed → bounce true.
      */
-    fun sendTransfer(
+    suspend fun sendTransfer(
         address: String,
         amountNano: Long,
         payload: String? = null,
@@ -100,75 +107,86 @@ class TonWallet(
         bounce: Boolean? = null,
     ): TransferResult {
         require(amountNano > 0) { "amount must be > 0 nanotons" }
-        try {
-            val amount = BigInteger.valueOf(amountNano)
-            val gasReserve = Utils.toNano(0.01)
-            val needed = amount.add(gasReserve)
-            val balance = wallet.balance ?: BigInteger.ZERO
-            if (balance < needed) {
-                return TransferResult.Err(
-                    "Insufficient balance: ${formatTon(balance)} TON, need ${formatTon(needed)} TON (amount + gas)",
-                )
-            }
+        return try {
+            withContext(Dispatchers.IO) {
+                val amount = BigInteger.valueOf(amountNano)
+                val gasReserve = Utils.toNano(0.01)
+                val needed = amount.add(gasReserve)
+                val balance = wallet.getBalance() ?: BigInteger.ZERO
+                if (balance < needed) {
+                    return@withContext TransferResult.Err(
+                        "Insufficient balance: ${formatTon(balance)} TON, need ${formatTon(needed)} TON (amount + gas)",
+                    )
+                }
 
-            val destAddr = resolveDestination(address)
-            val bounceFlag = bounce ?: try {
-                tonCenter.isDeployed(destAddr)
-            } catch (e: IOException) {
-                throw e
-            } catch (_: Exception) {
-                false
-            }
+                val destAddr = resolveDestination(address)
+                val bounceFlag = bounce ?: try {
+                    tonCenter.isDeployed(destAddr)
+                } catch (e: IOException) {
+                    throw e
+                } catch (_: Exception) {
+                    false
+                }
 
-            val seqno = wallet.seqno
-            val inner = WalletV5InnerRequest.builder()
-                .outActions(
-                    OutList.builder()
-                        .actions(
-                            listOf(
-                                outgoingPayment(destAddr, amount, payload, payloadBoc, bounceFlag),
-                            ),
-                        )
-                        .build(),
-                )
-                .hasOtherActions(false)
-                .build()
-            val config = WalletV5Config.builder()
-                .walletId(walletId)
-                .seqno(seqno)
-                .body(inner.toCell())
-                .build()
+                val seqno = wallet.getSeqno()
+                val inner = WalletV5InnerRequest.builder()
+                    .outActions(
+                        OutList.builder()
+                            .actions(
+                                listOf(
+                                    outgoingPayment(destAddr, amount, payload, payloadBoc, bounceFlag),
+                                ),
+                            )
+                            .build(),
+                    )
+                    .hasOtherActions(false)
+                    .build()
+                val config = WalletV5Config.builder()
+                    .walletId(walletId)
+                    .seqno(seqno)
+                    .body(inner.toCell())
+                    .build()
 
-            val boc = wallet.prepareExternalMsg(config).toCell().toBase64()
-            val tonResp = tonCenter.sendBocReturnHash(boc)
-                ?: return TransferResult.Err("Empty sendBocReturnHash response")
-            if (!tonResp.isSuccess) {
-                return TransferResult.Err(
-                    tonResp.error ?: "sendBocReturnHash failed, code=${tonResp.code}",
-                )
+                val boc = wallet.prepareExternalMsg(config).toCell().toBase64()
+                val tonResp = tonCenter.sendBocReturnHash(boc)
+                    ?: return@withContext TransferResult.Err("Empty sendBocReturnHash response")
+                if (!tonResp.isSuccess) {
+                    return@withContext TransferResult.Err(
+                        tonResp.error ?: "sendBocReturnHash failed, code=${tonResp.code}",
+                    )
+                }
+                val hash = hashFromResult(tonResp.result)
+                    ?: return@withContext TransferResult.Err(
+                        "sendBocReturnHash ok but no hash in result=${tonResp.result}",
+                    )
+                val start = System.currentTimeMillis()
+                if (!waitSeqno(seqno)) {
+                    return@withContext TransferResult.Err(
+                        "BOC accepted (hash=$hash) but wallet seqno did not increase — transfer dropped or not executed",
+                    )
+                }
+                val end = System.currentTimeMillis()
+                println("Seqno wait = " + (end-start))
+                TransferResult.Ok(hash)
             }
-            val hash = hashFromResult(tonResp.result)
-                ?: return TransferResult.Err(
-                    "sendBocReturnHash ok but no hash in result=${tonResp.result}",
-                )
-            if (!waitSeqno(seqno)) {
-                return TransferResult.Err(
-                    "BOC accepted (hash=$hash) but wallet seqno did not increase — transfer dropped or not executed",
-                )
-            }
-            return TransferResult.Ok(hash)
         } catch (e: IOException) {
             throw e
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            return TransferResult.Err(e.message ?: e::class.simpleName ?: "unknown", e)
+            TransferResult.Err(e.message ?: e::class.simpleName ?: "unknown", e)
         }
     }
 
-    fun getBalance(): BalanceResult {
+    suspend fun getBalance(): BalanceResult {
         return try {
-            val nano = wallet.balance ?: BigInteger.ZERO
-            BalanceResult.Ok(BigDecimal(nano).divide(NANOTON, 9, RoundingMode.DOWN))
+            withContext(Dispatchers.IO) {
+                val nano = wallet.getBalance() ?: BigInteger.ZERO
+                BalanceResult.Ok(BigDecimal(nano).divide(NANOTON, 9, RoundingMode.DOWN))
+            }
         } catch (e: IOException) {
+            throw e
+        } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             BalanceResult.Err(e.message ?: e::class.simpleName ?: "unknown", e)
@@ -179,18 +197,48 @@ class TonWallet(
         tonCenter.close()
     }
 
-    private fun waitSeqno(seqnoBefore: Long): Boolean {
-        repeat(8) {
-            Thread.sleep(2_000)
-            try {
-                if (wallet.seqno > seqnoBefore) return true
-            } catch (e: IOException) {
-                throw e
-            } catch (_: Exception) {
-                // keep polling
+    private suspend fun waitSeqno(seqnoBefore: Long): Boolean {
+        val n = expectedWaitMs.get().coerceIn(SEQNO_FLOOR_MS, SEQNO_MAX_N_MS)
+        val started = System.currentTimeMillis()
+        val deadline = started + SEQNO_DEADLINE_MS
+        fun elapsedMs(): Long = System.currentTimeMillis() - started
+
+        if (n > 0L) delay(n)
+        if (seqnoReady(seqnoBefore)) {
+            expectedWaitMs.set(maxOf(SEQNO_FLOOR_MS, n * 3 / 4))
+            return true
+        }
+
+        if (SEQNO_RETRY_MS > 0L) delay(SEQNO_RETRY_MS)
+        if (seqnoReady(seqnoBefore)) {
+            learnFromMiss(n, elapsedMs())
+            return true
+        }
+
+        while (true) {
+            val remaining = deadline - System.currentTimeMillis()
+            if (remaining <= 0L) break
+            delay(minOf(SEQNO_POLL_MS, remaining))
+            if (seqnoReady(seqnoBefore)) {
+                learnFromMiss(n, elapsedMs())
+                return true
             }
         }
         return false
+    }
+
+    private fun seqnoReady(seqnoBefore: Long): Boolean {
+        return try {
+            wallet.getSeqno() > seqnoBefore
+        } catch (e: IOException) {
+            throw e
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun learnFromMiss(n: Long, tMs: Long) {
+        expectedWaitMs.set(((n + tMs) / 2).coerceIn(SEQNO_FLOOR_MS, SEQNO_MAX_N_MS))
     }
 
     /** Fragment BOC as-is when present; otherwise a text comment. */
@@ -244,9 +292,11 @@ class TonWallet(
         return if (missing == 0) value else value + "=".repeat(4 - missing)
     }
 
-    private fun resolveDns(domain: String): Address {
+    private suspend fun resolveDns(domain: String): Address {
         return try {
-            resolveDnsHttp(domain)
+            withContext(Dispatchers.IO) { resolveDnsHttp(domain) }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: WalletException) {
             throw e
         } catch (e: Exception) {
@@ -282,6 +332,12 @@ class TonWallet(
     companion object {
         /** Default Wallet V5R1 walletId used by Tonkeeper on mainnet. */
         const val MAINNET_WALLET_ID = 2147483409L
+        private const val SEQNO_FLOOR_MS = 400L
+        private const val SEQNO_MAX_N_MS = 12_000L
+        private const val SEQNO_DEADLINE_MS = 16_000L
+        private const val SEQNO_INITIAL_MS = 1_000L
+        private const val SEQNO_RETRY_MS = 500L
+        private const val SEQNO_POLL_MS = 1_000L
         private val NANOTON = BigDecimal.TEN.pow(9)
         private val dnsHttp: HttpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))

@@ -2,6 +2,7 @@ package iris.ton.fragment
 
 import iris.ton.wallet.TonWallet
 import iris.ton.wallet.TransferResult
+import kotlinx.coroutines.CancellationException
 import java.io.IOException
 
 /**
@@ -91,6 +92,8 @@ class FragmentStars(
                 is TransferResult.Err -> StarsResult.Err(sent.message, sent.cause)
             }
         } catch (e: IOException) {
+            throw e
+        } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             StarsResult.Err(e.message ?: e::class.simpleName ?: "unknown", e)

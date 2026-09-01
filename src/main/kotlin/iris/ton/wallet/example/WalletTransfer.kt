@@ -2,9 +2,10 @@ package iris.ton.wallet.example
 
 import iris.ton.wallet.TonWallet
 import iris.ton.wallet.TransferResult
+import kotlinx.coroutines.runBlocking
 import org.ton.ton4j.utils.Utils
 
-fun main() {
+fun main() = runBlocking {
 	val walletApiKey = System.getenv("TONCENTER_API_KEY")
 		?.ifBlank { null }
 		?: System.getenv("TONCONSOLE_API_KEY").orEmpty()
