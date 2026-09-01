@@ -6,6 +6,16 @@ import kotlinx.serialization.json.JsonObject
 
 class WalletException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 
+sealed class TransferResult {
+    data class Ok(val txHash: String) : TransferResult()
+    data class Err(val message: String, val cause: Throwable? = null) : TransferResult()
+}
+
+sealed class BalanceResult {
+    data class Ok(val balance: java.math.BigDecimal) : BalanceResult()
+    data class Err(val message: String, val cause: Throwable? = null) : BalanceResult()
+}
+
 enum class TxStatus {
     /** Indexer has no record yet (or hash unknown). */
     PENDING,

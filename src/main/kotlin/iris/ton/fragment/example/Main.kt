@@ -3,6 +3,7 @@ package iris.ton.fragment.example
 import iris.ton.fragment.FragmentClient
 import iris.ton.fragment.FragmentStars
 import iris.ton.fragment.StarsResult
+import iris.ton.wallet.BalanceResult
 import iris.ton.wallet.TonWallet
 import kotlinx.coroutines.runBlocking
 
@@ -36,7 +37,10 @@ fun main() = runBlocking {
             val user = stars.getUser(username)
             println("user = $user")
             println("price = ${stars.getStarsPrice(quantity)}")
-            println("balance = ${wallet.getBalance()} TON")
+            when (val balance = wallet.getBalance()) {
+                is BalanceResult.Ok -> println("balance = ${balance.balance} TON")
+                is BalanceResult.Err -> System.err.println("balance failed: ${balance.message}")
+            }
 
             when (val result = stars.payStarsOrder(username, quantity, showSender)) {
                 is StarsResult.Ok -> println("tx = ${result.txHash}")

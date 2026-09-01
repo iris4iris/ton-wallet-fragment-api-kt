@@ -1,6 +1,8 @@
 package iris.ton.fragment
 
 import iris.ton.wallet.TonWallet
+import iris.ton.wallet.TransferResult
+import java.io.IOException
 
 /**
  * High-level Stars API: look up a recipient and pay an order.
@@ -79,13 +81,17 @@ class FragmentStars(
     ): StarsResult {
         return try {
             val payment = quoteStarsOrder(username, quantity, showSender)
-            val hash = wallet.sendTransfer(
+            when (val sent = wallet.sendTransfer(
                 address = payment.destination,
                 amountNano = payment.amountNano,
                 payloadBoc = payment.payload,
                 bounce = true,
-            )
-            StarsResult.Ok(hash)
+            )) {
+                is TransferResult.Ok -> StarsResult.Ok(sent.txHash)
+                is TransferResult.Err -> StarsResult.Err(sent.message, sent.cause)
+            }
+        } catch (e: IOException) {
+            throw e
         } catch (e: Exception) {
             StarsResult.Err(e.message ?: e::class.simpleName ?: "unknown", e)
         }

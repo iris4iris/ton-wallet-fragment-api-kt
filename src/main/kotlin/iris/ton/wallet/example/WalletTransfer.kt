@@ -1,6 +1,7 @@
 package iris.ton.wallet.example
 
 import iris.ton.wallet.TonWallet
+import iris.ton.wallet.TransferResult
 import org.ton.ton4j.utils.Utils
 
 fun main() {
@@ -17,7 +18,12 @@ fun main() {
 		?: error("TON_AMOUNT is required (TON, e.g. 0.05)")
 
 	TonWallet(walletApiKey, walletMnemonic).use {
-		val response = it.sendTransfer(address, amountNano = Utils.toNano(quantity).toLong(), "")
-		println(response)
+		when (val response = it.sendTransfer(
+			address,
+			amountNano = Utils.toNano(quantity).toLong(),
+		)) {
+			is TransferResult.Ok -> println(response.txHash)
+			is TransferResult.Err -> System.err.println(response.message)
+		}
 	}
 }

@@ -20,6 +20,7 @@ import org.ton.ton4j.toncenter.TonCenter
 import org.ton.ton4j.toncenter.model.SendBocResponse
 import org.ton.ton4j.utils.Utils
 import kotlinx.serialization.json.Json
+import java.io.IOException
 import java.math.BigDecimal
 import java.math.BigInteger
 import java.math.RoundingMode
@@ -84,10 +85,10 @@ class TonWallet(
     }
 
     /**
+     * @param address destination: user-friendly (`EQ`/`UQ`, 48 chars), raw (`0:hex`), * or a TON DNS name (`name.ton` / `name.t.me`).
      * @param amountNano nanotons
      * @param payload text comment for a plain transfer. Ignored when [payloadBoc] is set.
      * @param payloadBoc base64 BOC body (Fragment invoice). Sent as-is.
-     *   One of [payload] or [payloadBoc] must be non-null.
      * @param bounce `null` = auto: true if dest is deployed, false for uninit wallets
      *   (`t.me/wallet` first receive). Fragment contracts are deployed → bounce true.
      */
@@ -97,18 +98,15 @@ class TonWallet(
         payload: String? = null,
         payloadBoc: String? = null,
         bounce: Boolean? = null,
-    ): String {
+    ): TransferResult {
         require(amountNano > 0) { "amount must be > 0 nanotons" }
-        require(payload != null || payloadBoc != null) {
-            "payload or payloadBoc must be specified"
-        }
         try {
             val amount = BigInteger.valueOf(amountNano)
             val gasReserve = Utils.toNano(0.01)
             val needed = amount.add(gasReserve)
             val balance = wallet.balance ?: BigInteger.ZERO
             if (balance < needed) {
-                throw WalletException(
+                return TransferResult.Err(
                     "Insufficient balance: ${formatTon(balance)} TON, need ${formatTon(needed)} TON (amount + gas)",
                 )
             }
@@ -116,6 +114,8 @@ class TonWallet(
             val destAddr = resolveDestination(address)
             val bounceFlag = bounce ?: try {
                 tonCenter.isDeployed(destAddr)
+            } catch (e: IOException) {
+                throw e
             } catch (_: Exception) {
                 false
             }
@@ -141,31 +141,37 @@ class TonWallet(
 
             val boc = wallet.prepareExternalMsg(config).toCell().toBase64()
             val tonResp = tonCenter.sendBocReturnHash(boc)
-                ?: throw WalletException("Empty sendBocReturnHash response")
+                ?: return TransferResult.Err("Empty sendBocReturnHash response")
             if (!tonResp.isSuccess) {
-                throw WalletException(
+                return TransferResult.Err(
                     tonResp.error ?: "sendBocReturnHash failed, code=${tonResp.code}",
                 )
             }
             val hash = hashFromResult(tonResp.result)
-                ?: throw WalletException(
+                ?: return TransferResult.Err(
                     "sendBocReturnHash ok but no hash in result=${tonResp.result}",
                 )
-            waitSeqno(seqno, hash)
-            return hash
-        } catch (e: WalletException) {
+            if (!waitSeqno(seqno)) {
+                return TransferResult.Err(
+                    "BOC accepted (hash=$hash) but wallet seqno did not increase — transfer dropped or not executed",
+                )
+            }
+            return TransferResult.Ok(hash)
+        } catch (e: IOException) {
             throw e
         } catch (e: Exception) {
-            throw WalletException("Wallet transfer failed: ${e.message}", e)
+            return TransferResult.Err(e.message ?: e::class.simpleName ?: "unknown", e)
         }
     }
 
-    fun getBalance(): BigDecimal {
+    fun getBalance(): BalanceResult {
         return try {
             val nano = wallet.balance ?: BigInteger.ZERO
-            BigDecimal(nano).divide(NANOTON, 9, RoundingMode.DOWN)
+            BalanceResult.Ok(BigDecimal(nano).divide(NANOTON, 9, RoundingMode.DOWN))
+        } catch (e: IOException) {
+            throw e
         } catch (e: Exception) {
-            throw WalletException("Failed to read balance: ${e.message}", e)
+            BalanceResult.Err(e.message ?: e::class.simpleName ?: "unknown", e)
         }
     }
 
@@ -173,18 +179,18 @@ class TonWallet(
         tonCenter.close()
     }
 
-    private fun waitSeqno(seqnoBefore: Long, hash: String) {
+    private fun waitSeqno(seqnoBefore: Long): Boolean {
         repeat(8) {
             Thread.sleep(2_000)
             try {
-                if (wallet.seqno > seqnoBefore) return
+                if (wallet.seqno > seqnoBefore) return true
+            } catch (e: IOException) {
+                throw e
             } catch (_: Exception) {
                 // keep polling
             }
         }
-        throw WalletException(
-            "BOC accepted (hash=$hash) but wallet seqno did not increase — transfer dropped or not executed",
-        )
+        return false
     }
 
     /** Fragment BOC as-is when present; otherwise a text comment. */
