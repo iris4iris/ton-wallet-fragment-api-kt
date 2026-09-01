@@ -24,11 +24,9 @@ class FragmentStars(
         val clean = username.trim().removePrefix("@")
         if (clean.isEmpty()) return null
         return try {
-            val user = fragment.getUserAddress(clean)
-            val name = user.found?.name
-            val address = user.found?.recipient
-            if (name.isNullOrBlank() || address.isNullOrBlank()) null
-            else Recipient(nickname = name, address = address)
+            requireRecipient(clean)
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             null
         }
@@ -38,16 +36,14 @@ class FragmentStars(
         username: String,
         quantity: Int,
         showSender: Boolean = false,
-    ): StarsPayment {
-        val clean = username.trim().removePrefix("@")
-        val user = fragment.getUserAddress(clean)
-        val nickname = user.found?.name
-        val recipient = user.found?.recipient
-        if (nickname.isNullOrBlank() || recipient.isNullOrBlank()) {
-            throw FragmentException("User @$clean not found on Fragment")
-        }
+    ): StarsPayment = quoteStarsOrder(requireRecipient(username), quantity, showSender)
 
-        val init = fragment.initBuyStars(recipient, quantity)
+    suspend fun quoteStarsOrder(
+        recipient: Recipient,
+        quantity: Int,
+        showSender: Boolean = false,
+    ): StarsPayment {
+        val init = fragment.initBuyStars(recipient.address, quantity)
         if (init.needTon == true) {
             throw FragmentException(
                 "Fragment need_ton: connect a TON wallet on fragment.com, then recopy cookies (stel_ton_token is required for buys)",
@@ -81,7 +77,23 @@ class FragmentStars(
         showSender: Boolean = false,
     ): StarsResult {
         return try {
-            val payment = quoteStarsOrder(username, quantity, showSender)
+            payStarsOrder(requireRecipient(username), quantity, showSender)
+        } catch (e: IOException) {
+            throw e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            StarsResult.Err(e.message ?: e::class.simpleName ?: "unknown", e)
+        }
+    }
+
+    suspend fun payStarsOrder(
+        recipient: Recipient,
+        quantity: Int,
+        showSender: Boolean = false,
+    ): StarsResult {
+        return try {
+            val payment = quoteStarsOrder(recipient, quantity, showSender)
             when (val sent = wallet.sendTransfer(
                 address = payment.destination,
                 amountNano = payment.amountNano,
@@ -98,5 +110,17 @@ class FragmentStars(
         } catch (e: Exception) {
             StarsResult.Err(e.message ?: e::class.simpleName ?: "unknown", e)
         }
+    }
+
+    private suspend fun requireRecipient(username: String): Recipient {
+        val clean = username.trim().removePrefix("@")
+        if (clean.isEmpty()) throw FragmentException("Username is blank")
+        val user = fragment.getUserAddress(clean)
+        val nickname = user.found?.name
+        val address = user.found?.recipient
+        if (nickname.isNullOrBlank() || address.isNullOrBlank()) {
+            throw FragmentException("User @$clean not found on Fragment")
+        }
+        return Recipient(nickname = nickname, address = address)
     }
 }
