@@ -9,6 +9,7 @@ import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 import io.ktor.http.Parameters
 import io.ktor.serialization.kotlinx.json.json
+import iris.ton.utils.SharedHttp
 import kotlinx.serialization.json.Json
 import java.math.RoundingMode
 
@@ -23,7 +24,7 @@ import java.math.RoundingMode
 class FragmentClient(
     private val cookies: String,
     private val hash: String,
-    private val http: HttpClient = defaultHttpClient(),
+    private val http: HttpClient = SharedHttp.client,
     private val ownClient: Boolean = false,
 ) : AutoCloseable {
 
@@ -117,14 +118,10 @@ class FragmentClient(
             }
         }
 
-        val json: Json = Json {
-            ignoreUnknownKeys = true
-            isLenient = true
-            explicitNulls = false
-        }
+        val json: Json = SharedHttp.json
 
         fun create(cookies: String, hash: String): FragmentClient =
-            FragmentClient(cookies, hash, defaultHttpClient(), ownClient = true)
+            FragmentClient(cookies, hash)
 
         private val TON_HTML =
             Regex("""icon-ton">([\d,]+)(?:<span class="mini-frac">\.(\d+)</span>)?""")

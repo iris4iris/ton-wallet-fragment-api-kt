@@ -20,7 +20,11 @@ import org.ton.ton4j.toncenter.TonCenter
 import org.ton.ton4j.toncenter.model.SendBocResponse
 import org.ton.ton4j.toncenter.model.WalletInformationResponse
 import org.ton.ton4j.utils.Utils
-import kotlinx.serialization.json.Json
+import iris.ton.utils.SharedHttp
+import io.ktor.client.call.body
+import io.ktor.client.request.get
+import io.ktor.client.request.header
+import io.ktor.client.request.parameter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -29,13 +33,6 @@ import java.io.IOException
 import java.math.BigDecimal
 import java.math.BigInteger
 import java.math.RoundingMode
-import java.net.URI
-import java.net.URLEncoder
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import java.nio.charset.StandardCharsets
-import java.time.Duration
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -56,6 +53,8 @@ class TonWallet(
     private val tonCenter: TonCenter
     private val wallet: WalletV5
     private val expectedWaitMs = AtomicLong(SEQNO_INITIAL_MS)
+    private val host = if (testnet) "https://testnet.toncenter.com" else "https://toncenter.com"
+    private val dnsRecordsUrl = "$host/api/v3/dns/records"
 
     init {
         require(words.size == 12 || words.size == 24) {
@@ -315,7 +314,7 @@ class TonWallet(
 
     private suspend fun resolveDns(domain: String): Address {
         return try {
-            withContext(Dispatchers.IO) { resolveDnsHttp(domain) }
+            resolveDnsHttp(domain)
         } catch (e: CancellationException) {
             throw e
         } catch (e: WalletException) {
@@ -325,19 +324,16 @@ class TonWallet(
         }
     }
 
-    private fun resolveDnsHttp(domain: String): Address {
-        val host = if (testnet) "https://testnet.toncenter.com" else "https://toncenter.com"
-        val encoded = URLEncoder.encode(domain, StandardCharsets.UTF_8)
-        val request = HttpRequest.newBuilder(URI.create("$host/api/v3/dns/records?domain=$encoded"))
-            .header("X-API-Key", apiKey)
-            .timeout(Duration.ofSeconds(20))
-            .GET()
-            .build()
-        val response = dnsHttp.send(request, HttpResponse.BodyHandlers.ofString())
-        if (response.statusCode() !in 200..299) {
-            throw WalletException("DNS lookup HTTP ${response.statusCode()} for $domain")
+    private suspend fun resolveDnsHttp(domain: String): Address {
+        val response = SharedHttp.client.get(dnsRecordsUrl) {
+            parameter("domain", domain)
+            header("X-API-Key", apiKey)
+            header("Accept", "application/json")
         }
-        val parsed = DNS_JSON.decodeFromString<DnsRecordsResponse>(response.body())
+        if (response.status.value !in 200..299) {
+            throw WalletException("DNS lookup HTTP ${response.status.value} for $domain")
+        }
+        val parsed = SharedHttp.json.decodeFromString<DnsRecordsResponse>(response.body())
         val wallet = parsed.records.firstNotNullOfOrNull { rec ->
             rec.dnsWallet?.takeIf { it.isNotBlank() }
                 ?: rec.nftItemOwner?.takeIf { it.isNotBlank() }
@@ -360,10 +356,6 @@ class TonWallet(
         private const val SEQNO_RETRY_MS = 500L
         private const val SEQNO_POLL_MS = 2_000L
         private val NANOTON = BigDecimal.TEN.pow(9)
-        private val dnsHttp: HttpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
-            .build()
-        private val DNS_JSON = Json { ignoreUnknownKeys = true }
 
         fun nanoToTon(nano: Long): BigDecimal =
             BigDecimal.valueOf(nano).divide(NANOTON, 9, RoundingMode.DOWN)
