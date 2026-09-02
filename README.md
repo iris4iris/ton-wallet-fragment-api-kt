@@ -32,8 +32,6 @@ when (val result = stars.payStarsOrder("durov", 50, showSender = true)) {
 }
 ```
 
-`initBuyStarsRequest` **must** send `payment_method=ton`. Without it Fragment returns `Access denied` even when `searchStarsRecipient` works.
-
 `getBuyStarsLink` takes `show_sender`: `0` anonymous (default), `1` shows the Telegram account tied to the Fragment session.
 
 ## Credentials
